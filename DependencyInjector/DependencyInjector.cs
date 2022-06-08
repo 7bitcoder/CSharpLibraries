@@ -1,90 +1,137 @@
+using System.Reflection;
+
 namespace CSharpLibraries.DependencyInjector
 {
+    [System.AttributeUsage(System.AttributeTargets.Parameter)]
+    public class UniqueAttribute : System.Attribute { }
+
+    [System.AttributeUsage(System.AttributeTargets.Parameter)]
+    public class SharedAttribute : System.Attribute
+    {
+        public string token { get; set; }
+        public SharedAttribute(string token)
+        {
+            this.token = token;
+        }
+    }
     public class DependencyInjector
     {
+        private enum ServiceScope
+        {
+            Shared,
+            Unique,
+        }
+        private class ServiceInfo
+        {
+            public Type? type { get; init; }
+            public ServiceScope scope { get; init; }
+            public bool isShared => scope == ServiceScope.Shared;
+            public bool isUnique => scope == ServiceScope.Unique;
+        }
+        private class ServiceKey
+        {
+            public Type? type { get; set; }
+            public string? token { get; set; } = null;
+
+            public override int GetHashCode() => type.GetHashCode() + token?.GetHashCode() ?? 0;
+            public override bool Equals(object? obj) => Equals(obj as ServiceKey);
+            public bool Equals(ServiceKey? obj) => obj != null && obj.type == this.type && token == this.token;
+        }
         private HashSet<Type> underConstruction = new();
-        private Dictionary<Type, Type> _typesMap = new();
-        private Dictionary<Type, object> _registeredObjects = new();
+        private Dictionary<Type, ServiceInfo> _typesMap = new();
+        private Dictionary<ServiceKey, object> _services = new();
 
-        public void AddSingeleton<T>()
-            where T : class
+        public void AddUnique<T>() where T : class => AddUnique<T, T>();
+        public void AddUnique<I, T>() where T : I where I : class => add<I, T>(ServiceScope.Unique);
+        public void AddShared<T>() where T : class => AddShared<T, T>();
+        public void AddShared<I, T>() where T : I where I : class => add<I, T>(ServiceScope.Shared);
+        private void add<I, T>(ServiceScope scope) where T : I where I : class
         {
-            _typesMap[typeof(T)] = typeof(T);
+            _typesMap[typeof(I)] = new ServiceInfo { type = typeof(T), scope = scope };
         }
-
-        public void AddSingeleton<I, T>()
-            where T : I
-            where I : class
+        public T? getUnique<T>() where T : class => getService(typeof(T), ServiceScope.Unique) as T;
+        public T? getShared<T>(string? token = null) where T : class => getService(typeof(T), ServiceScope.Shared, token) as T;
+        private object? getService(Type interfaceType, ServiceScope? scope = null, string? token = null)
         {
-            _typesMap[typeof(I)] = typeof(T);
-        }
-
-        public T? get<T>() where T : class
-        {
-            return get(typeof(T)) as T;
-        }
-
-        public void build()
-        {
-            foreach (var interfaceType in _typesMap.Keys)
+            if (!_typesMap.TryGetValue(interfaceType, out var info))
             {
-                registerObject(interfaceType);
+                return null;
             }
+            scope ??= info.scope;
+            if (info.isShared && scope == ServiceScope.Shared)
+            {
+                return getSharedService(interfaceType, token);
+            }
+            else if (scope == ServiceScope.Unique)
+            {
+                return createService(interfaceType);
+            }
+            return null;
         }
-
-        private object registerObject(Type interfaceType)
+        private object getSharedService(Type interfaceType, string? token = null)
+        {
+            var key = new ServiceKey { type = interfaceType, token = token };
+            if (_services.TryGetValue(key, out var obj))
+            {
+                return obj;
+            }
+            return createAndRegisterService(interfaceType, token);
+        }
+        private object createAndRegisterService(Type interfaceType, string? token = null)
+        {
+            var key = new ServiceKey { type = interfaceType, token = token };
+            var obj = createService(interfaceType);
+            _services[key] = obj;
+            return obj;
+        }
+        private object createService(Type interfaceType)
         {
             if (underConstruction.Contains(interfaceType))
             {
                 throw new InvalidOperationException($"Circular dependency detected in {interfaceType.FullName} constructor");
             }
             underConstruction.Add(interfaceType);
-            var obj = createObject(interfaceType);
-            _registeredObjects[interfaceType] = obj;
-            underConstruction.Remove(interfaceType);
-            return obj;
-        }
 
-        private object createObject(Type interfaceType)
-        {
-            var type = _typesMap[interfaceType];
+            var constructor = getServiceConstructor(interfaceType);
             List<object> parameters = new();
-            var constructors = type.GetConstructors();
-            if (constructors.Length != 1)
+            foreach (var parameterInfo in constructor.GetParameters())
             {
-                throw new InvalidOperationException($"Class {type.FullName} should have exactly one constructor");
+                var service = getParameterService(parameterInfo);
+                if (service is null)
+                {
+                    throw new InvalidOperationException($"service {parameterInfo.ParameterType.FullName} was not found, check if Scope Attributes match registered service type");
+                }
+                parameters.Add(service);
             }
-            var constructor = constructors.First();
-            var parametersInfo = constructor.GetParameters();
-
-            foreach (var parameterInfo in parametersInfo)
-            {
-                var paramType = parameterInfo.ParameterType;
-                parameters.Add(getParameter(paramType));
-            }
+            underConstruction.Remove(interfaceType);
             return constructor.Invoke(parameters.ToArray());
         }
-
-        private object getParameter(Type parameterType)
+        private ConstructorInfo getServiceConstructor(Type interfaceType)
         {
-            var obj = get(parameterType);
-            if (obj is not null)
+            var info = _typesMap[interfaceType];
+            var constructors = info.type.GetConstructors();
+            if (constructors.Length != 1)
             {
-                return obj;
+                throw new InvalidOperationException($"Class {info.type.FullName} should have exactly one constructor");
             }
-            else
-            {
-                return registerObject(parameterType);
-            }
+            return constructors.First();
         }
-
-        private object? get(Type interfaceType)
+        private object? getParameterService(ParameterInfo parameterInfo)
         {
-            if (_registeredObjects.TryGetValue(interfaceType, out var obj))
+            string? token = null;
+            ServiceScope? serviceScope = null;
+            if (parameterInfo.GetCustomAttributes(typeof(UniqueAttribute), false).Any())
             {
-                return obj;
+                serviceScope = ServiceScope.Unique;
             }
-            return null;
+            var sharedAttr = parameterInfo.GetCustomAttributes(typeof(SharedAttribute), false).FirstOrDefault() as SharedAttribute;
+            if (sharedAttr is not null)
+            {
+                serviceScope = ServiceScope.Shared;
+                token = sharedAttr.token;
+            }
+            var paramType = parameterInfo.ParameterType;
+            return getService(paramType, serviceScope, token);
         }
     }
 }
