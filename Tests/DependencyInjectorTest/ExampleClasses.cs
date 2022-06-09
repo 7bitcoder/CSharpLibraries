@@ -173,8 +173,8 @@ internal class MutipleInheranceRef
 {
     public IMutipleInherance[] Parameters { get; }
 
-    public MutipleInheranceRef(IMutipleInherance[] parameters)
+    public MutipleInheranceRef(IEnumerable<IMutipleInherance> parameters)
     {
-        Parameters = parameters;
+        Parameters = parameters.ToArray();
     }
 }

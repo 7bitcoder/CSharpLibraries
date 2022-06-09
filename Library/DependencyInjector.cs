@@ -54,29 +54,26 @@ public class DependencyInjector
     public T[] GetUniques<T>() where T : class => GetServices<T>(ServiceScope.Unique);
     public T? GetShared<T>(string? token = null) where T : class => GetServices<T>(ServiceScope.Shared, token).FirstOrDefault();
     public T[] GetShares<T>(string? token = null) where T : class => GetServices<T>(ServiceScope.Shared, token);
-
     private T[] GetServices<T>(ServiceScope? scope = null, string? token = null) where T : class
     {
-        return GetServices(typeof(T), ServiceScope.Shared, token) as T[] ?? new T[0];
+        var services = GetServices(typeof(T), scope, token);
+        return Array.ConvertAll(services.ToArray(), item => item as T) ?? new T[0];
     }
-    private object[] GetServices(Type interfaceType, ServiceScope? scope = null, string? token = null)
+    private IEnumerable<object> GetServices(Type interfaceType, ServiceScope? scope = null, string? token = null)
     {
-        var result = new List<object>();
         var serviceKey = new ServiceKey(interfaceType, null, token);
         if (!_typesMap.TryGetValue(serviceKey, out var infos))
         {
-            return new object[0];
+            yield break;
         }
         foreach (var info in infos)
         {
             var service = GetService(serviceKey with { Type = info.Type }, info, scope);
             if (service is not null)
             {
-                result.Add(service);
+                yield return service;
             }
         }
-
-        return result.ToArray();
     }
 
     private object? GetService(ServiceKey serviceKey, ServiceInfo serviceInfo, ServiceScope? scope = null)
@@ -156,7 +153,11 @@ public class DependencyInjector
         if (paramType.IsArray)
         {
             paramType = paramType.GetElementType();
-            return GetServices(paramType ?? typeof(object), serviceScope, token);
+            var listType = typeof(List<>).MakeGenericType(paramType);
+            dynamic result = Activator.CreateInstance(listType);
+            var cast = result as List<object>;
+            cast.AddRange(GetServices(paramType ?? typeof(object), serviceScope, token));
+            return result.ToArray();
         }
         return GetServices(paramType, serviceScope, token)?.FirstOrDefault();
     }
