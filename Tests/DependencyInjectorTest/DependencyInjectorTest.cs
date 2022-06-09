@@ -270,7 +270,7 @@ public class DependencyInjectorTest
 
         service.Should().NotBeNull();
         uniqueService.Should().NotBeNull();
-        sharedService.Should().NotBeNull();
+        sharedService.Should().BeNull();
         service.Parameter.Should().NotBe(uniqueService);
     }
 

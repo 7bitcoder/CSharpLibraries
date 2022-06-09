@@ -21,12 +21,12 @@ public class DependencyInjector
         Shared,
         Unique,
     }
-    private record ServiceInfo(Type? Type, ServiceScope Scope)
+    private record ServiceInfo(Type Type, ServiceScope Scope)
     {
         public bool IsShared => Scope == ServiceScope.Shared;
         public bool IsUnique => Scope == ServiceScope.Unique;
     }
-    private record ServiceKey(Type? IType, Type? Type, string? Token)
+    private record ServiceKey(Type IType, Type? Type, string? Token)
     {
         public override int GetHashCode() => IType.GetHashCode() + Type?.GetHashCode() ?? 0 + Token?.GetHashCode() ?? 0;
     }
@@ -51,28 +51,32 @@ public class DependencyInjector
         }
     }
     public T? GetUnique<T>() where T : class => GetServices<T>(ServiceScope.Unique).FirstOrDefault();
-    public List<T> GetUniques<T>() where T : class => GetServices<T>(ServiceScope.Unique);
+    public T[] GetUniques<T>() where T : class => GetServices<T>(ServiceScope.Unique);
     public T? GetShared<T>(string? token = null) where T : class => GetServices<T>(ServiceScope.Shared, token).FirstOrDefault();
-    public List<T> GetShares<T>(string? token = null) where T : class => GetServices<T>(ServiceScope.Shared, token);
-    private List<T> GetServices<T>(ServiceScope? scope = null, string? token = null, Type? interfaceType = null) where T : class
+    public T[] GetShares<T>(string? token = null) where T : class => GetServices<T>(ServiceScope.Shared, token);
+
+    private T[] GetServices<T>(ServiceScope? scope = null, string? token = null) where T : class
     {
-        interfaceType ??= typeof(T);
-        var result = new List<T>();
+        return GetServices(typeof(T), ServiceScope.Shared, token) as T[] ?? new T[0];
+    }
+    private object[] GetServices(Type interfaceType, ServiceScope? scope = null, string? token = null)
+    {
+        var result = new List<object>();
         var serviceKey = new ServiceKey(interfaceType, null, token);
         if (!_typesMap.TryGetValue(serviceKey, out var infos))
         {
-            return new List<T>();
+            return new object[0];
         }
         foreach (var info in infos)
         {
-            var service = GetService(serviceKey with { Type = info.Type }, info, scope) as T;
+            var service = GetService(serviceKey with { Type = info.Type }, info, scope);
             if (service is not null)
             {
                 result.Add(service);
             }
         }
 
-        return result;
+        return result.ToArray();
     }
 
     private object? GetService(ServiceKey serviceKey, ServiceInfo serviceInfo, ServiceScope? scope = null)
@@ -152,9 +156,8 @@ public class DependencyInjector
         if (paramType.IsArray)
         {
             paramType = paramType.GetElementType();
-            return GetServices<object>(serviceScope, token, paramType).ToArray();
-
+            return GetServices(paramType ?? typeof(object), serviceScope, token);
         }
-        return GetServices<object>(serviceScope, token, paramType)?.FirstOrDefault();
+        return GetServices(paramType, serviceScope, token)?.FirstOrDefault();
     }
 }
