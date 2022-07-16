@@ -327,5 +327,4 @@ public class DependencyInjectorTest
         uniqueServices.Should().NotBeNull();
         service.Parameters.Should().BeEquivalentTo(uniqueServices);
     }
-
 }
